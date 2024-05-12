@@ -65,6 +65,7 @@ prep_dt %>%
     minor_breaks = seq(10, 60, by = 1),
     labels = seq(10, 60, by = 5)
   ) +
+  expand_limits(y = 60) +
   theme_minimal() +
   theme(legend.position = "bottom", 
         legend.direction = "vertical") +
