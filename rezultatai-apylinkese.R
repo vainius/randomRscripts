@@ -3,20 +3,23 @@ library(jsonlite)
 library(tidyverse)
 library(glue)
 
-urlToDataFrame <- function(url){
+urlToDataFrame <- function(url, subfield = NULL){
   response <- GET(url)
-  content(response, "text", encoding = "UTF-8") %>%
+  data <- content(response, "text", encoding = "UTF-8") %>%
     fromJSON() %>%
-    .[['data']] %>%
-    as.data.frame()  
+    .[['data']]
+  
+  if (!is.null(subfield)) {
+    data <- data[[subfield]]
+  }
+  
+  as.data.frame(data)
 }
 
 # rinkimu metaduomenys
-
 meta_dt <- urlToDataFrame("https://www.vrk.lt/statiniai/puslapiai/rinkimai/rt.json")
 
 # surinkti aktyvuma
-
 rinkimu_dir <- '/1504/1/'
 aktyvumo_hash <- urlToDataFrame(glue("https://www.vrk.lt/statiniai/puslapiai/rinkimai{rinkimu_dir}aktyvumas/hash.json"))
 
@@ -31,31 +34,20 @@ for (resource in aktyvumo_failai){
 aktyvumo_dt <- do.call(rbind, res)
 
 # surinkti rezultatus  
-
 some_id <- 2070
 res_hash <- urlToDataFrame(glue("https://www.vrk.lt/statiniai/puslapiai/rinkimai{rinkimu_dir}{some_id}/rezultatai/hash.json"))
 res_failai <- res_hash$resource %>% 
   .[grep("^rezultataiVienmRpl\\d+$", .)]
 
-urlToDataFrame2 <- function(url){
-  response <- GET(url)
-  content(response, "text", encoding = "UTF-8") %>%
-    fromJSON() %>%
-    .[['data']] %>%
-    .[['balsai']] %>%
-    as.data.frame()  
-}
-
 res_rpl <- list()
 for (resource in res_failai){
-   tmp_dt <- urlToDataFrame2(glue("https://www.vrk.lt/statiniai/puslapiai/rinkimai{rinkimu_dir}{some_id}/rezultatai/{resource}.json"))
-   res_rpl[[resource]] <- mutate(tmp_dt, resource = resource)
+  tmp_dt <- urlToDataFrame(glue("https://www.vrk.lt/statiniai/puslapiai/rinkimai{rinkimu_dir}{some_id}/rezultatai/{resource}.json"), subfield = "balsai")
+  res_rpl[[resource]] <- mutate(tmp_dt, resource = resource)
 }
 
 res_dt <- do.call(rbind, res_rpl)
 
-#
-
+# parengti ir atvaizduoti
 res_dt <- res_dt %>%
   mutate(resource = str_extract(resource, "\\d+"))
 
@@ -67,20 +59,17 @@ indicator_dt <- res_dt %>%
 indicator_join <- indicator_dt %>%
   inner_join(aktyvumo_dt, by = join_by(resource == rpl_id))
 
-#
-
 indicator_join %>%
   mutate(rinkeju_skaicius = as.numeric(rinkeju_skaicius)) %>%
   mutate(atsiunte = if_else(atsiunte, 'Suskaičiavusios', 'Nesuskaičiavusios')) %>%
   ggplot(aes(x = rinkeju_skaicius)) +
-    geom_histogram() +
-    facet_wrap(~atsiunte, ncol = 1, scales = 'fixed') +
-    ggtitle('Suskaičiavusių ir nesuskaičiavusių balsus apylinkių dydžių palyginimas') +
-    theme_bw() +
-    xlab('Rinkėjų skaičius apylinkėje') +
-    ylab('Apylinkių skaičius')
+  geom_histogram() +
+  facet_wrap(~atsiunte, ncol = 1, scales = 'fixed') +
+  ggtitle('Suskaičiavusių ir nesuskaičiavusių balsus apylinkių dydžių palyginimas') +
+  theme_bw() +
+  xlab('Rinkėjų skaičius apylinkėje') +
+  ylab('Apylinkių skaičius')
 
 indicator_join %>%
   group_by(atsiunte) %>%
-  summarize(mean(as.numeric(rinkeju_skaicius)),
-            n())
+  summarize(mean_rinkeju_skaicius = mean(as.numeric(rinkeju_skaicius)), total_apylinkes = n())
