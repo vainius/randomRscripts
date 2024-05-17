@@ -114,6 +114,8 @@ value_range_df <- code_label_df %>%
 
 # check mean and sd over-time
 
+invert_scale_q <- c('D020', 'D026_05', 'D026', 'E039', 'E110', 'E111', 'E114', 'E115', 'E116', 'E117', 'G007_01', 'H009', 'H010', 'H011')
+
 summary_dt <- filtered_df %>%
   group_by(S002EVS, S003) %>%
   summarise(across(everything(), 
@@ -130,11 +132,13 @@ summary_dt <- filtered_df %>%
   filter(!is.na(value) & is.finite(value)) %>%
   inner_join(value_range_df, by = join_by(question)) %>%
   mutate(value = (value - min_value)/(max_value - min_value)) %>%
-  select(-max_value, -min_value)
+  select(-max_value, -min_value) %>%
+  mutate(value = if_else(question %in% invert_scale_q, 1 - value, value))
 
 code_label_df <- code_label_df %>%
   group_by(question) %>%
-  mutate(value_norm = (value - min(value))/(max(value) - min(value)))
+  mutate(value_norm = (value - min(value))/(max(value) - min(value))) %>%
+  mutate(value_norm = if_else(question %in% invert_scale_q, 1 - value_norm, value_norm))
   
 summary_sub <- summary_dt %>%
   mutate(S002EVS = as.numeric(str_extract(S002EVS, "^[0-9]+"))) %>%
@@ -145,7 +149,23 @@ summary_sub <- summary_dt %>%
   
 # 
 
-quest_labels <- summary_sub %>%
+muti_year_q <- summary_sub %>% 
+  filter(S003 == 'Lithuania') %>% 
+  group_by(question) %>%
+  summarize(n_cnt = n()) %>%
+  filter(n_cnt > 1) %>%
+  .[['question']]
+
+plot_sub <- summary_sub %>%
+  filter(question %in% setdiff(muti_year_q, c('B002', 'B003'))) %>%
+  mutate(question_full = ifelse(str_detect(question_full, "\n"),
+                                str_split(question_full, "\n", simplify = TRUE)[, 2],
+                                question_full)) %>%
+  mutate(question_full = ifelse(str_detect(question_full, ": "),
+                                str_split(question_full, ": ", simplify = TRUE)[, 2],
+                                question_full))
+
+quest_labels <- plot_sub %>%
   distinct(question, question_full) %>%
   inner_join(code_label_df, by = join_by(question)) %>%
   filter(!(value_label %in% c(1:9)))
@@ -159,16 +179,17 @@ eastern_europe <- c('Albania', 'Armenia', 'Azerbaijan', 'Belarus', 'Bosnia and H
                     'Latvia', 'Lithuania', 'Moldova', 'Montenegro', 'North Macedonia', 'Poland', 
                     'Romania', 'Russia', 'Serbia', 'Slovakia', 'Slovenia', 'Turkey', 'Ukraine')
 
-quest_avg <- summary_sub %>%
+quest_avg <- plot_sub %>%
   mutate(region = case_when(S003 %in% western_europe ~ 'Western Europe',
                             S003 %in% eastern_europe ~ 'Eastern Europe')) %>%
   filter(!is.na(region)) %>%
   group_by(region, S002EVS, question, question_full) %>%
   summarize(overall_avg = median(val_mean, na.rm = T), .groups = 'drop')
 
-summary_sub %>%
+plot_sub %>%
   filter(S002EVS >= 1990) %>%
   filter(S003 %in% c('Lithuania')) %>%
+  filter(question %in% muti_year_q) %>%
   ggplot(aes(x = S002EVS, y = val_mean)) +
   geom_point(aes(shape = S003)) +
   geom_path(aes(group = S003, linetype = S003)) +
@@ -182,27 +203,46 @@ summary_sub %>%
 
 quest_sub_vect <- c('H009', 'H010', 'H011')
 
+quest_labels_2 <- summary_sub %>%
+  filter(question %in% quest_sub_vect) %>%
+  distinct(question, question_full) %>%
+  inner_join(code_label_df, by = join_by(question)) %>%
+  filter(!(value_label %in% c(1:9)))
+
 summary_sub %>%
   filter(S002EVS == 2017) %>%
   filter(question %in% quest_sub_vect) %>%
   ggplot(aes(x = 0, y = val_mean)) +
   geom_point() +
   facet_wrap(~question_full, ncol = 3) +
-  geom_text(data = filter(quest_labels, question %in% quest_sub_vect), 
+  geom_text(data = quest_labels_2, 
             aes(label = value_label, y = value_norm), hjust = 1, size = 3) +
   geom_text_repel(aes(label = S003), max.overlaps = 20)
 
 label_dt <- summary_sub %>%
   filter(S002EVS == 2017) %>%
-  filter(question %in% quest_sub_vect[1])
-
-summary_sub %>%
+  filter(question %in% quest_sub_vect[3])
+label_dt_2 <- summary_sub %>%
   filter(S002EVS == 2017) %>%
-  filter(question %in% quest_sub_vect) %>%
-  ggplot(aes(x = question_full, y = val_mean, group = S003)) +
-  geom_point(aes(shape = S003 == 'Lithuania')) + 
-  geom_line(aes(linetype = S003 == 'Lithuania'), size = 0.1) + 
-  geom_text_repel(data = label_dt, aes(label = S003), max.overlaps = 20) +  
-  theme_minimal() +  # Minimal theme
-  theme(axis.text.x = element_text(angle = 0, hjust = 1, vjust = 1)) + 
-  labs(x = "Question", y = "Value Mean")
+  filter(question %in% quest_sub_vect[1]) %>%
+  filter(val_mean > 0.75 | val_mean < 0.35 | S003 == 'Lithuania')
+
+plot_sub_2 <- summary_sub %>%
+  filter(S002EVS == 2017) %>%
+  filter(question %in% quest_sub_vect)
+
+plot_sub_2 %>%
+  ggplot(aes(x = question_full, y = val_mean)) +
+  geom_point(aes(group = S003), size = 0.1) + 
+  geom_line(aes(group = S003), size = 0.1) + 
+  geom_line(data = filter(plot_sub_2, S003 == 'Lithuania'), aes(group = S003), size = 0.5, linetype = 'dashed') + 
+  geom_text_repel(data = label_dt, aes(label = S003), max.overlaps = 20, size = 3.5) +  
+  geom_text_repel(data = label_dt_2, aes(label = S003), max.overlaps = 20, size = 3.5) +  
+  geom_text(data = filter(quest_labels_2, question == 'H010' & value_norm < 1), 
+            aes(label = value_label, y = value_norm), hjust = 0.5, size = 3) +
+  theme_minimal() +
+  labs(x = "Question", y = "Survey response") +
+  geom_hline(yintercept = 0.5, linetype = 'dotted') +
+  ggtitle("European Values Study 2017-2021: Approval of Government Surveillance Measures") +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1),
+        legend.position = 'none')
