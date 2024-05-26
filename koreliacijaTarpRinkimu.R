@@ -40,6 +40,8 @@ join_dt %>%
   
 regr_dt <- join_dt %>%
   filter(ter_overlap >= 0.5) %>%
+  filter(viso_rinkeju.x > 300) %>%
+  filter(viso_rinkeju.y > 300) %>%
   mutate(across(`Ingrida ŠIMONYTĖ.x`:`Valentinas MAZURONIS`, as.numeric)) %>%
   mutate(across(`Gitanas NAUSĖDA.y`:`Giedrimas JEGLINSKAS`, as.numeric)) %>%
   mutate(across(`Ingrida ŠIMONYTĖ.x`:`Valentinas MAZURONIS`, ~ . * (1 / viso_rinkeju.x))) %>%
@@ -48,17 +50,17 @@ regr_dt <- join_dt %>%
 x_vars <- names(regr_dt)[which(names(regr_dt) == "Ingrida ŠIMONYTĖ.x"):which(names(regr_dt) == "Valentinas MAZURONIS")]
 y_vars <- names(regr_dt)[which(names(regr_dt) == "Gitanas NAUSĖDA.y"):which(names(regr_dt) == "Giedrimas JEGLINSKAS")]
 
-ordered_x <- names(sort(colSums(regr_dt[, x_vars]), decreasing = TRUE))
-ordered_y <- names(sort(colSums(regr_dt[, y_vars]), decreasing = TRUE))
+x_vars <- names(sort(colSums(regr_dt[, x_vars]), decreasing = TRUE))
+y_vars <- names(sort(colSums(regr_dt[, y_vars]), decreasing = TRUE))
 
 regr_dt <- regr_dt %>%
-  select(all_of(ordered_x), all_of(ordered_y), everything())
+  select(all_of(x_vars), all_of(y_vars), everything())
 
 # correlations
 
 library(corrplot)
 
-corr_m <- cor(regr_dt[ordered_x], regr_dt[ordered_y])
+corr_m <- cor(regr_dt[x_vars], regr_dt[y_vars])
 
 col <- colorRampPalette(c("blue", "white", "red"))(300)[50:250]
 
@@ -68,7 +70,50 @@ corrplot(corr_m, method = "circle",
          col = col,
          is.corr = TRUE) 
 
-# regressions
+# run regularized regression
+
+run_glmnet <- function(df, x_vars, y_var, weights) {
+  x_vars_escaped <- paste0("`", x_vars, "`")
+  y_var_escaped <- paste0("`", y_var, "`")
+  
+  formula <- as.formula(paste(paste(y_var_escaped, paste(x_vars_escaped, collapse = " + "), sep = " ~ "), "+ factor(rpg_pav)"))
+  model_matrix <- model.matrix(formula, data = df)[, -1]
+  response_vector <- df[[y_var]]
+  
+  if (is.null(weights)) {
+    model <- cv.glmnet(model_matrix, response_vector, alpha = 0.95)
+  } else {
+    model <- cv.glmnet(model_matrix, response_vector, alpha = 0.95, weights = weights)
+  }
+
+  return(model)
+}
+
+coefficients_list <- list()
+for (y_var in y_vars) {
+  model <- run_glmnet(regr_dt, x_vars, y_var, weights = regr_dt$viso_rinkeju.x)
+  coefficients <- coef(model, s = model$lambda.1se)
+  coefficients <- as.matrix(coefficients)
+  
+  colnames(coefficients) <- y_var
+  coefficients_list[[y_var]] <- coefficients
+}
+
+coefficients_df <- do.call(cbind, coefficients_list)
+coefficients_df <- as.data.frame(coefficients_df)
+
+coefficients_df <- coefficients_df[!grepl("factor\\(rpg_pav\\)", rownames(coefficients_df)), ]
+coefficients_df <- coefficients_df[!grepl("Intercept", rownames(coefficients_df)), ]
+rownames(coefficients_df) <- gsub("`", "", rownames(coefficients_df))
+
+corrplot(as.matrix(coefficients_df), method = "circle", 
+         tl.col = "black", tl.srt = 45, 
+         addCoef.col = "black", number.cex = 0.7, tl.cex = 0.8,
+         col = col,
+         is.corr = FALSE,
+         cl.pos = 'n') 
+
+# run regression
 
 run_regression <- function(df, x_vars, y_var) {
   x_vars_escaped <- paste0("`", x_vars, "`")
@@ -78,8 +123,8 @@ run_regression <- function(df, x_vars, y_var) {
 }
 
 coefficients_list <- list()
-for (y_var in ordered_y) {
-  model <- run_regression(regr_dt, ordered_x, y_var)
+for (y_var in y_vars) {
+  model <- run_regression(regr_dt, x_vars, y_var)
   coefficients <- coef(model)
   coefficients_list[[y_var]] <- coefficients
 }
@@ -92,4 +137,26 @@ coefficients_df <- coefficients_df[!grepl("factor\\(rpg_pav\\)", rownames(coeffi
 rownames(coefficients_df) <- gsub("`", "", rownames(coefficients_df))
 colnames(coefficients_df) <- y_vars
 
-View(coefficients_df)
+corrplot(as.matrix(coefficients_df), method = "circle", 
+         tl.col = "black", tl.srt = 45, 
+         addCoef.col = "black", number.cex = 0.7, tl.cex = 0.8,
+         col = col,
+         is.corr = FALSE) 
+
+# debug V. Mazuronis
+
+regr_dt %>%
+  ggplot(aes(x = `Valentinas MAZURONIS`, y = `Gitanas NAUSĖDA.y`)) +
+  geom_point() +
+  geom_smooth()
+
+regr_dt %>%
+  filter(`Valentinas MAZURONIS` == 0) %>% View()
+
+debug_form <- as.formula(paste(paste('`Gitanas NAUSĖDA.y`', 
+                                     paste(paste0("`", x_vars, "`"), collapse = " + "), 
+                                     sep = " ~ "), "+ factor(rpg_pav) - 1"))
+
+regr_dt %>%
+  lm(formula = debug_form) %>%
+  summary()
